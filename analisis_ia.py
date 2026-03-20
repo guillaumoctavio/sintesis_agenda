@@ -12,7 +12,7 @@ MODELO = "llama3.1"
 def analizar_noticia_con_ollama(titulo, cuerpo):
     # Este es el "Prompt Maestro". Aquí le damos la personalidad y las reglas estrictas a la IA.
     prompt = f"""
-Eres un consultor político argentino de alto nivel.
+Eres un consultor de redacción argentino de alto nivel.
 Lee la siguiente noticia y extrae la información objetiva solicitada. 
 Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON válido, sin texto adicional, ni formato markdown.
 
@@ -21,7 +21,7 @@ Estructura esperada del JSON:
     "temas_clave": ["Etiqueta 1", "Etiqueta 2"], // Conceptos generales (ej. Economía, Inseguridad, Elecciones, Paritarias). Máximo 3.
     "actores_principales": ["Nombre 1", "Institución 1"], // Nombres propios de políticos, jueces, gremios, empresas o países involucrados. Máximo 4.
     "provincia_mencionada": "Provincia argentina principal. Usa 'Nacional' si afecta a todo el país o 'Internacional' si es exterior.",
-    "resumen_ejecutivo": "Un resumen directo y al grano de máximo 3 líneas con los hechos duros."
+    "resumen_ejecutivo": "Un resumen directo y al grano de máximo 5 líneas con los hechos duros."
 }}
 
 Título de la noticia: {titulo}
@@ -55,7 +55,7 @@ def iniciar_analisis_prueba():
     cursor = conexion.cursor()
     
     # Buscamos noticias que tengan cuerpo pero que TODAVÍA no hayan sido analizadas por la IA
-    cursor.execute("SELECT id, titulo, cuerpo FROM noticias WHERE cuerpo != '' AND resumen IS NULL")
+    cursor.execute("SELECT id, titulo, cuerpo FROM noticias WHERE cuerpo != '' AND resumen IS NULL AND fecha_publicacion = '2026-03-18'")
     noticias_pendientes = cursor.fetchall()
     conexion.close()
 

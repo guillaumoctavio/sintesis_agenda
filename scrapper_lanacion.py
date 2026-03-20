@@ -114,7 +114,7 @@ def obtener_titulares_lanacion():
             print(f"  -> Encontramos {len(links_seccion)} noticias en {sec['categoria']}.")
             total_encontradas += len(links_seccion)
             
-            for titulo, link in links_seccion[:5]: 
+            for titulo, link in links_seccion: 
                 
                 datos = extraer_datos_noticia_lanacion(link)
                 

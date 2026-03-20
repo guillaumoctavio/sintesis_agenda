@@ -1,90 +1,123 @@
 import sqlite3
 import requests
-import json
+import time
+from datetime import datetime
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODELO = "llama3.1"
 
-def generar_boletin_pba_seguridad():
-    print("=== GENERANDO BOLETÍN EJECUTIVO PREMIUM: PBA (SEGURIDAD Y JUSTICIA) ===\n")
+# --- CONFIGURACIÓN OPTIMIZADA PARA RX 7600 8GB + 32GB RAM ---
+PROVINCIA_OBJETIVO = "Nacional" 
+LIMITE_NOTICIAS = 30 # Tu hardware se banca esto sin problemas
+CARACTERES_POR_NOTA = 1200 # Unos 300 tokens por nota. 30 notas = 9.000 tokens. ¡Entra perfecto en la memoria ampliada!
+
+def generar_boletin_premium():
+    print(f"=== GENERANDO REPORTE DE INTELIGENCIA ESTRATÉGICA: {PROVINCIA_OBJETIVO.upper()} ===\n")
     
     conexion = sqlite3.connect('clipping.db')
     cursor = conexion.cursor()
     
-    # 1. SOLUCIÓN AL SESGO DE DIARIO: Pedimos 7 de Clarín y 7 de Infobae
-    query = """
-        SELECT diario, titulo, resumen, link 
+    # 1. BÚSQUEDA MULTIMEDIOS
+    query = f"""
+        SELECT diario, titulo, resumen, link, cuerpo 
         FROM noticias 
-        WHERE (provincia LIKE '%Buenos Aires%' OR provincia = 'Nacional' OR provincia = 'La Matanza')
-        AND (temas LIKE '%Justicia%' OR temas LIKE '%Inseguridad%')
+        WHERE (provincia LIKE '%{PROVINCIA_OBJETIVO}%' OR provincia = 'Nacional')
+        AND (temas LIKE '%Economía%')
         AND resumen IS NOT NULL
-        AND diario = ?
         ORDER BY fecha_extraccion DESC
-        LIMIT 7
+        LIMIT ?
     """
     
-    cursor.execute(query, ('Clarín',))
-    noticias_clarin = cursor.fetchall()
-    
-    cursor.execute(query, ('Infobae',))
-    noticias_infobae = cursor.fetchall()
-    
+    cursor.execute(query, (LIMITE_NOTICIAS,))
+    noticias_cliente = cursor.fetchall()
     conexion.close()
 
-    # Juntamos ambos resultados
-    noticias_cliente = noticias_clarin + noticias_infobae
-
     if not noticias_cliente:
-        print("No se encontraron noticias que coincidan con el perfil del cliente hoy.")
+        print(f"No se encontraron noticias recientes relevantes para {PROVINCIA_OBJETIVO}.")
         return
 
-    print(f"Buscando en la BD... Se encontraron {len(noticias_cliente)} noticias plurales. Procesando síntesis analítica...\n")
+    print(f"🔎 Se extrajeron {len(noticias_cliente)} noticias con texto completo. Empaquetando datos...\n")
 
+    # 2. EMPAQUETADO DEL CONTEXTO
     paquete_noticias = ""
-    for diario, titulo, resumen, link in noticias_cliente:
-        paquete_noticias += f"[{diario}] TÍTULO: {titulo}\nRESUMEN EXACTO: {resumen}\nLINK: {link}\n\n"
+    for diario, titulo, resumen, link, cuerpo in noticias_cliente:
+        
+        # Truncamos inteligentemente a 1200 caracteres para mantener el foco en la línea editorial
+        cuerpo_recortado = cuerpo[:CARACTERES_POR_NOTA] + "... [Continúa]" if cuerpo and len(cuerpo) > CARACTERES_POR_NOTA else cuerpo
+        
+        paquete_noticias += f"[{diario}] TÍTULO: {titulo}\nRESUMEN: {resumen}\nTEXTO EDITORIAL: {cuerpo_recortado}\nLINK: {link}\n\n"
 
-    # 2 y 3. SOLUCIÓN AL ANÁLISIS PICANTE: El Nuevo Prompt
+    # 3. EL SÚPER-PROMPT DE INTELIGENCIA
     prompt = f"""
-Eres el Director de Inteligencia de un Diputado de la Provincia de Buenos Aires.
-Analiza el siguiente paquete de noticias de hoy (extraídas de Clarín e Infobae) sobre Inseguridad y Justicia, y redacta un informe confidencial.
+Eres el Director de Inteligencia Estratégica y Análisis de Medios de un importante Senador de {PROVINCIA_OBJETIVO}.
+Tu tarea es leer el paquete de noticias adjunto (que incluye medios como Página/12, La Nación, Clarín, Perfil e Infobae) y redactar un "Boletín Ejecutivo de Situación".
 
-Estructura OBLIGATORIA de tu reporte:
+El tono debe ser estrictamente profesional, agudo, objetivo y confidencial.
 
-1. EL TERMÓMETRO POLÍTICO (Temas Calientes y Línea Editorial):
-- Identifica los 2 temas más "picantes" o graves del día.
-- Analiza la LÍNEA EDITORIAL de los medios: ¿De qué manera distinta cubren los temas Clarín e Infobae? ¿Alguien está bajando una línea específica contra el gobierno o enfocándose en el morbo? Sé agudo y analítico.
+ESTRUCTURA OBLIGATORIA DEL INFORME:
 
-2. DETALLE DE NOTICIAS (Por temática):
-Agrupa la información en viñetas por tema (ej. Narcotráfico, Casos Judiciales).
-Para cada noticia, NO inventes un resumen genérico, UTILIZA la información provista en el "RESUMEN EXACTO" para dar un contexto completo, mencionando qué diario lo publica.
-Debajo de cada viñeta, pega el LINK para que el cliente pueda leer más.
+1. SÍNTESIS EJECUTIVA:
+- Un párrafo inicial que resuma el "humor social y político" del día basándote en la gravedad, el tono de los titulares y el TEXTO EDITORIAL de las noticias.
 
-NOTICIAS CRUDAS:
+2. EL MAPA DE MEDIOS (Análisis de Línea Editorial):
+- Compara cómo están tratando la información los distintos diarios analizando sus TEXTOS EDITORIALES. 
+- ¿Hay un sesgo evidente? (Por ejemplo, ¿Página/12 usa adjetivos negativos mientras La Nación justifica? ¿Alguien omite datos clave?). Busca contradicciones o enfoques distintos sobre un mismo tema.
+
+3. DESGLOSE DE EJES CLAVE (Agrupación temática):
+- Agrupa las noticias en viñetas por tema principal (Ej: Economía, Conflictos Políticos, Casos Judiciales).
+- Para cada viñeta, redacta una síntesis completa utilizando la información del "RESUMEN" y los detalles del "TEXTO EDITORIAL". No inventes datos. Menciona siempre qué medio publicó qué enfoque.
+- AL FINAL DE CADA VIÑETA, debes pegar los LINKS EXACTOS correspondientes para que el Senador pueda ampliar la lectura.
+
+4. ALERTAS DE GESTIÓN (Recomendación Estratégica):
+- Basado en este panorama y el sesgo de los medios de hoy, dale a tu jefe 2 recomendaciones breves sobre qué temas debe evitar y qué temas presentan una oportunidad política para él.
+
+---
+NOTICIAS CRUDAS DEL DÍA:
 {paquete_noticias}
 """
 
+    # 4. CONFIGURACIÓN DEL PAYLOAD CON OVERCLOCKING CEREBRAL
     payload = {
         "model": MODELO,
         "prompt": prompt,
-        "stream": False 
+        "stream": False,
+        "options": {
+            "num_ctx": 16384,     # ¡AQUÍ ESTÁ LA MAGIA! Le damos a Llama 3.1 una memoria a corto plazo inmensa (16k tokens)
+            "temperature": 0.3,   # Bajamos la temperatura para que sea más analítico y menos "creativo/poético"
+            "top_p": 0.9          # Enfoca las respuestas en los conceptos más lógicos
+        }
     }
 
     try:
-        print("⏳ La IA está leyendo las noticias cruzadas y redactando el análisis. Esto tomará unos segundos...\n")
+        print("🤖 INICIANDO INFERENCIA LLAMA 3.1")
+        print("⚙️  Parámetros: num_ctx=16384, temperature=0.3")
+        print("⏳ La GPU Radeon RX 7600 está procesando el sesgo editorial de los 5 medios...")
+        
+        tiempo_inicio = time.time() # Iniciamos el cronómetro
+        
         respuesta = requests.post(OLLAMA_URL, json=payload)
         respuesta.raise_for_status()
         resultado = respuesta.json()
         
-        boletin_final = resultado['response']
-        print(boletin_final)
+        tiempo_fin = time.time() # Detenemos el cronómetro
+        duracion = round(tiempo_fin - tiempo_inicio, 2)
         
-        with open("boletin_pba_premium.txt", "w", encoding="utf-8") as f:
+        boletin_final = resultado['response']
+        print(f"\n✅ ¡Análisis completado en {duracion} segundos!\n")
+        print("="*60)
+        print(boletin_final)
+        print("="*60)
+        
+        # Guardamos el archivo con la fecha de hoy
+        fecha_hoy = datetime.now().strftime("%Y-%m-%d")
+        nombre_archivo = f"boletin_{PROVINCIA_OBJETIVO.replace(' ', '_')}_{fecha_hoy}.txt"
+        
+        with open(nombre_archivo, "w", encoding="utf-8") as f:
             f.write(boletin_final)
-            print("\n\n[💾 El boletín premium ha sido guardado en 'boletin_pba_premium.txt']")
+            print(f"\n[💾 El informe de inteligencia ha sido guardado en '{nombre_archivo}']")
 
     except Exception as e:
         print(f"Error al generar el boletín: {e}")
 
 if __name__ == "__main__":
-    generar_boletin_pba_seguridad()
+    generar_boletin_premium()

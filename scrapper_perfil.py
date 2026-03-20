@@ -138,8 +138,8 @@ def obtener_titulares_perfil():
             print(f"  -> Encontramos {len(links_seccion)} noticias en {sec['categoria']}.")
             total_encontradas += len(links_seccion)
             
-            # Procesamos las primeras 3 para probar
-            for titulo, link in links_seccion[:5]: 
+            # Procesamos todas las noticias encontradas
+            for titulo, link in links_seccion: 
                 
                 datos = extraer_datos_noticia_perfil(link)
                 
