@@ -1,15 +1,18 @@
 import sqlite3
 import requests
 import json
+import time
 import database  # <-- ¡Esta es la línea mágica que faltaba!
 
 # Configuración de tu servidor local de Ollama
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODELO = "llama3.1"
 
-# ... (aquí sigue el resto de tu código de analizar_noticia_con_ollama y iniciar_analisis_prueba) ...
-
 def analizar_noticia_con_ollama(titulo, cuerpo):
+    # 1. EL ESCUDO DE TEXTO: Truncamos notas inmensas para no ahogar la GPU
+    # 4000 caracteres son aprox 800-1000 tokens. Ideal para extraer datos sin perder contexto.
+    texto_limpio = cuerpo[:4000] if cuerpo else ""
+
     # Este es el "Prompt Maestro". Aquí le damos la personalidad y las reglas estrictas a la IA.
     prompt = f"""
 Eres un consultor de redacción argentino de alto nivel.
@@ -25,27 +28,38 @@ Estructura esperada del JSON:
 }}
 
 Título de la noticia: {titulo}
-Cuerpo de la noticia: {cuerpo}
+Cuerpo de la noticia: {texto_limpio}
 """ 
 
     payload = {
         "model": MODELO,
         "prompt": prompt,
         "format": "json",  # El truco mágico: obliga a Ollama a escupir JSON válido
-        "stream": False    # Queremos la respuesta completa de una vez, no palabra por palabra
+        "stream": False,   # Queremos la respuesta completa de una vez, no palabra por palabra
+        "options": {
+            "temperature": 0.1,  # Temperatura bajísima para que no invente cosas y respete el JSON
+            "num_ctx": 8192      # Ampliamos la ventana de contexto para que no se pierda al leer
+        }
     }
 
     try:
-        # Enviamos la noticia a tu placa de video / procesador local
-        respuesta = requests.post(OLLAMA_URL, json=payload)
+        # 2. EL BOTÓN DE PÁNICO: timeout=90. Si tarda más de 1 minuto y medio, aborta y sigue.
+        respuesta = requests.post(OLLAMA_URL, json=payload, timeout=90)
         respuesta.raise_for_status()
         resultado = respuesta.json()
         
         # Extraemos el texto generado por Llama 3.1 y lo convertimos a un diccionario de Python
         datos_json = json.loads(resultado['response'])
         return datos_json
+        
+    except requests.exceptions.Timeout:
+        print(f"     ⚠️  [TIMEOUT] La IA tardó demasiado con esta nota. Saltando...")
+        return None
+    except json.JSONDecodeError:
+        print(f"     ⚠️  [ERROR JSON] La IA no devolvió un formato válido.")
+        return None
     except Exception as e:
-        print(f"Error al procesar la noticia: {e}")
+        print(f"     ❌  [ERROR] Falló el análisis de la IA: {e}")
         return None
 
 def iniciar_analisis_prueba():
@@ -55,9 +69,14 @@ def iniciar_analisis_prueba():
     cursor = conexion.cursor()
     
     # Buscamos noticias que tengan cuerpo pero que TODAVÍA no hayan sido analizadas por la IA
-    cursor.execute("SELECT id, titulo, cuerpo FROM noticias WHERE cuerpo != '' AND resumen IS NULL AND fecha_publicacion = '2026-03-18'")
+    # OJO: Dejaste fijada la fecha '2026-03-24'. Si quieres que analice las de hoy, deberías cambiarla o quitar ese filtro.
+    cursor.execute("SELECT id, titulo, cuerpo FROM noticias WHERE resumen IS 'Sin resumen' AND fecha_publicacion = '2026-03-24'")
     noticias_pendientes = cursor.fetchall()
     conexion.close()
+
+    if not noticias_pendientes:
+        print("No hay noticias pendientes para analizar en esa fecha.")
+        return
 
     print(f"Hay {len(noticias_pendientes)} noticias esperando ser analizadas.\n")
 
@@ -81,9 +100,12 @@ def iniciar_analisis_prueba():
             else:
                 print("     ❌ Error al guardar en la BD.")
         else:
-            print("     ❌ Falló la IA al procesar la noticia.")
+            print("     ⏭️  Pasando a la siguiente nota...")
             
         print("-" * 60)
+        
+        # 3. EL RESPIRO DE LA GPU: Damos 1.5 segundos para que libere VRAM y no se ahogue tu RX 7600
+        time.sleep(1.5)
 
 if __name__ == "__main__":
     iniciar_analisis_prueba()
