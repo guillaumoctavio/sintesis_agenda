@@ -1,3 +1,27 @@
+# Entorno virtual
 venv/
 __pycache__/
-logs/*.log
+*.pyc
+*.pyo
+
+# Logs
+logs/
+
+# Base de datos (generada en ejecución)
+*.db
+
+# Credenciales — NUNCA commitear
+.env
+.env.*
+!.env.example
+
+# Reportes y exports generados automáticamente
+reportes/
+*.csv
+noticias_*.md
+boletin_*.md
+boletin_*.txt
+
+# Archivos de trabajo internos
+sugestiones.md
+metodologia_sintesis_agenda.md

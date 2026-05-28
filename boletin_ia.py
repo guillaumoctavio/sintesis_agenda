@@ -1,11 +1,12 @@
 import re
+import os
 import sqlite3
 import requests
 import time
 import argparse
 import logging
 from datetime import datetime
-from config import OLLAMA_URL, MODELO_IA, TEMPERATURA_BOLETIN, CTX_BOLETIN, DB_PATH
+from config import OLLAMA_URL, MODELO_IA, TEMPERATURA_BOLETIN, CTX_BOLETIN, DB_PATH, REPORTES_DIR
 from utils import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,28 @@ def limpiar_boletin(texto):
     texto = '\n'.join(resultado)
     texto = re.sub(r'\n{3,}', '\n\n', texto)
     return texto.strip()
+
+
+def agregar_fuentes(texto, noticias):
+    """Agrega sección de fuentes con links al final del boletín, agrupados por diario."""
+    por_diario = {}
+    for diario, titulo, temas, actores, ambito, relevancia, resumen, link in noticias:
+        if not link:
+            continue
+        por_diario.setdefault(diario, []).append((relevancia, titulo, link))
+
+    if not por_diario:
+        return texto
+
+    lineas = ["\n\n---\n\n**FUENTES**\n"]
+    for diario in sorted(por_diario):
+        lineas.append(f"\n*{diario}*")
+        for relevancia, titulo, link in por_diario[diario]:
+            icono = "🔴" if relevancia == "Alta" else "🟡"
+            titulo_corto = titulo[:80] + "…" if len(titulo) > 80 else titulo
+            lineas.append(f"{icono} [{titulo_corto}]({link})")
+
+    return texto + "\n".join(lineas)
 
 
 def generar_boletin_premium(provincia="Nacional", dias=7):
@@ -153,6 +176,7 @@ NOTICIAS DE LA SEMANA (relevancia Alta primero):
         respuesta = requests.post(OLLAMA_URL, json=payload, timeout=300)
         respuesta.raise_for_status()
         boletin_final = limpiar_boletin(respuesta.json()["response"])
+        boletin_final = agregar_fuentes(boletin_final, noticias_cliente)
 
         duracion = round(time.time() - tiempo_inicio, 2)
         logger.info(f"Análisis completado en {duracion}s.")
@@ -161,14 +185,24 @@ NOTICIAS DE LA SEMANA (relevancia Alta primero):
         print(boletin_final)
         print("=" * 60)
 
-        fecha_hoy = datetime.now().strftime("%Y-%m-%d")
-        nombre_archivo = f"boletin_{provincia.replace(' ', '_')}_{fecha_hoy}.txt"
+        ahora = datetime.now()
+        semana = ahora.strftime("%Y-W%V")
+        fecha_hoy = ahora.strftime("%Y-%m-%d")
+        hora = ahora.strftime("%Hh")
+
+        carpeta = os.path.join(REPORTES_DIR, semana)
+        os.makedirs(carpeta, exist_ok=True)
+
+        nombre_archivo = os.path.join(carpeta, f"boletin_{fecha_hoy}_{hora}.md")
         with open(nombre_archivo, "w", encoding="utf-8") as f:
+            f.write(f"# Informe — {fecha_hoy} {hora}\n\n")
             f.write(boletin_final)
         logger.info(f"Boletín guardado en '{nombre_archivo}'.")
+        return nombre_archivo
 
     except Exception as e:
         logger.error(f"Error al generar el boletín: {e}")
+        return None
 
 
 if __name__ == "__main__":

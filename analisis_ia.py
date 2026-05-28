@@ -24,13 +24,34 @@ def validar_analisis(datos):
         return False
     if not isinstance(datos.get("actores_principales"), list):
         return False
-    if datos.get("ambito") not in ("CABA", "Nacional", "Internacional"):
+    # Normalizar ámbito: el modelo a veces devuelve "CABA | Nacional" o "Local"
+    ambito_raw = datos.get("ambito", "")
+    ambito_norm = _normalizar_ambito(ambito_raw)
+    if not ambito_norm:
         return False
+    datos["ambito"] = ambito_norm
     if datos.get("relevancia_wolff") not in ("Alta", "Media", "Baja"):
         return False
     if not isinstance(datos.get("resumen_ejecutivo"), str):
         return False
+    if not datos.get("resumen_ejecutivo").strip():
+        return False
     return True
+
+
+def _normalizar_ambito(valor):
+    """Mapea variantes del modelo al valor canónico."""
+    VALIDOS = {"CABA", "Nacional", "Internacional"}
+    if valor in VALIDOS:
+        return valor
+    v = valor.upper()
+    if "CABA" in v:
+        return "CABA"
+    if "INTERN" in v:
+        return "Internacional"
+    if any(x in v for x in ("NACION", "LOCAL", "ARGENTIN", "DEPORT")):
+        return "Nacional"
+    return None
 
 
 def analizar_noticia_con_ollama(titulo, cuerpo):

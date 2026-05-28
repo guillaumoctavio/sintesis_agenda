@@ -1,3 +1,5 @@
+import os
+
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODELO_IA = "llama3.1"
 TEMPERATURA_ANALISIS = 0.1
@@ -7,3 +9,8 @@ CTX_BOLETIN = 16384
 LIMITE_CUERPO_CHARS = 4000
 PAUSA_ENTRE_REQUESTS = 1.5
 DB_PATH = "clipping.db"
+REPORTES_DIR = "reportes"
+
+# Telegram — configurar con variables de entorno
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
