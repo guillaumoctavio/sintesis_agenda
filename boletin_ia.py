@@ -1,3 +1,12 @@
+"""
+Generador de informe ejecutivo por cliente.
+
+Lee el perfil y prompt del cliente desde la tabla `clientes` en la BD,
+y genera el boletín usando las noticias clasificadas en `analisis_clientes`.
+
+Uso:
+    python3 boletin_ia.py --cliente wolff --dias 1
+"""
 import re
 import os
 import sqlite3
@@ -6,51 +15,38 @@ import time
 import argparse
 import logging
 from datetime import datetime
+import database
 from config import OLLAMA_URL, MODELO_IA, TEMPERATURA_BOLETIN, CTX_BOLETIN, DB_PATH, REPORTES_DIR
 from utils import setup_logging
 
 logger = logging.getLogger(__name__)
-MODELO = MODELO_IA
 LIMITE_NOTICIAS = 50
 
 
 def limpiar_boletin(texto):
-    # 1a. Eliminar subsecciones que solo dicen "no hay noticias"
     texto = re.sub(
         r'\*\s+\*\*[^\n]+\*\*\s*\n(?:\s+\*\s+[^\n]*no hay[^\n]*\n?)+',
-        '',
-        texto,
-        flags=re.IGNORECASE,
+        '', texto, flags=re.IGNORECASE,
     )
-    # 1b. Eliminar subsecciones que quedaron vacías (header sin bullets)
-    texto = re.sub(
-        r'\*\s+\*\*[^\n]+\*\*\s*\n(?=\s*\*\s+\*\*|\s*\n|\Z)',
-        '',
-        texto,
-    )
-
-    # 2. Eliminar bullets duplicados (misma línea en dos secciones distintas)
+    texto = re.sub(r'\*\s+\*\*[^\n]+\*\*\s*\n(?=\s*\*\s+\*\*|\s*\n|\Z)', '', texto)
     lineas = texto.split('\n')
     vistas = set()
     resultado = []
     for linea in lineas:
         clave = linea.strip()
-        if len(clave) > 40:  # solo comparar líneas con contenido real
+        if len(clave) > 40:
             if clave in vistas:
                 continue
             vistas.add(clave)
         resultado.append(linea)
-
-    # 3. Colapsar líneas vacías consecutivas
     texto = '\n'.join(resultado)
     texto = re.sub(r'\n{3,}', '\n\n', texto)
     return texto.strip()
 
 
 def agregar_fuentes(texto, noticias):
-    """Agrega sección de fuentes con links al final del boletín, agrupados por diario."""
     por_diario = {}
-    for diario, titulo, temas, actores, ambito, relevancia, resumen, link in noticias:
+    for diario, titulo, ambito, relevancia, resumen, link in noticias:
         if not link:
             continue
         por_diario.setdefault(diario, []).append((relevancia, titulo, link))
@@ -69,35 +65,64 @@ def agregar_fuentes(texto, noticias):
     return texto + "\n".join(lineas)
 
 
-def generar_boletin_premium(provincia="Nacional", dias=7):
-    logger.info(f"=== GENERANDO BOLETÍN: {provincia.upper()} — últimos {dias} días ===")
+def generar_boletin(slug_cliente="wolff", dias=1):
+    cliente = database.obtener_cliente(slug_cliente)
+    if not cliente:
+        logger.error(f"Cliente '{slug_cliente}' no encontrado en la base de datos.")
+        return None
+
+    logger.info(f"=== BOLETÍN: {cliente['nombre'].upper()} — últimos {dias} días ===")
 
     conexion = sqlite3.connect(DB_PATH)
     cursor = conexion.cursor()
+
+    # Primero intentar desde analisis_clientes (Stage 2 multi-cliente)
     cursor.execute(
-        """SELECT diario, titulo, temas, actores, ambito, relevancia, resumen, link
-           FROM noticias
-           WHERE relevancia IN ('Alta', 'Media')
-             AND resumen IS NOT NULL
-             AND fecha_extraccion >= date('now', ?)
+        """SELECT n.diario, n.titulo, n.temas, n.actores, n.ambito,
+                  ac.relevancia, ac.resumen_cliente, n.link
+           FROM analisis_clientes ac
+           JOIN noticias n ON n.id = ac.noticia_id
+           WHERE ac.cliente_id = ?
+             AND ac.relevancia IN ('Alta', 'Media')
+             AND ac.resumen_cliente IS NOT NULL
+             AND n.fecha_extraccion >= date('now', ?)
            ORDER BY
-             CASE relevancia WHEN 'Alta' THEN 0 ELSE 1 END,
-             fecha_extraccion DESC
+             CASE ac.relevancia WHEN 'Alta' THEN 0 ELSE 1 END,
+             n.fecha_extraccion DESC
            LIMIT ?""",
-        (f"-{dias} days", LIMITE_NOTICIAS),
+        (cliente["id"], f"-{dias} days", LIMITE_NOTICIAS),
     )
-    noticias_cliente = cursor.fetchall()
+    noticias = cursor.fetchall()
+
+    # Fallback al campo legacy noticias.relevancia (para el flujo anterior de Wolff)
+    if not noticias and slug_cliente == "wolff":
+        logger.info("Sin datos en analisis_clientes, usando fallback legacy de noticias.relevancia")
+        cursor.execute(
+            """SELECT diario, titulo, temas, actores, ambito, relevancia, resumen, link
+               FROM noticias
+               WHERE relevancia IN ('Alta', 'Media')
+                 AND resumen IS NOT NULL
+                 AND fecha_extraccion >= date('now', ?)
+               ORDER BY
+                 CASE relevancia WHEN 'Alta' THEN 0 ELSE 1 END,
+                 fecha_extraccion DESC
+               LIMIT ?""",
+            (f"-{dias} days", LIMITE_NOTICIAS),
+        )
+        noticias = cursor.fetchall()
     conexion.close()
 
-    if not noticias_cliente:
-        logger.warning(f"No se encontraron noticias de relevancia Alta/Media en los últimos {dias} días.")
-        return
+    if not noticias:
+        logger.warning(f"No hay noticias Alta/Media para '{slug_cliente}' en los últimos {dias} días.")
+        return None
 
-    logger.info(f"{len(noticias_cliente)} noticias disponibles. Empaquetando contexto...")
+    alta = sum(1 for n in noticias if n[5] == "Alta")
+    media = sum(1 for n in noticias if n[5] == "Media")
+    logger.info(f"{len(noticias)} noticias ({alta} Alta, {media} Media). Generando boletín...")
 
-    paquete_noticias = ""
-    for i, (diario, titulo, temas, actores, ambito, relevancia, resumen, link) in enumerate(noticias_cliente, 1):
-        paquete_noticias += (
+    paquete = ""
+    for i, (diario, titulo, temas, actores, ambito, relevancia, resumen, link) in enumerate(noticias, 1):
+        paquete += (
             f"[{i}] [{relevancia}] [{diario}] [{ambito}]\n"
             f"TÍTULO: {titulo}\n"
             f"TEMAS: {temas}\n"
@@ -106,109 +131,92 @@ def generar_boletin_premium(provincia="Nacional", dias=7):
             f"LINK: {link}\n\n"
         )
 
+    prompt_cliente = cliente.get("prompt_boletin") or ""
     prompt = f"""
-Sos el asesor político de cabecera de Waldo Wolff. Conocés en profundidad su posición:
-- Legislador de la Ciudad de Buenos Aires, Presidente de la Comisión de Presupuesto, Hacienda y Política Tributaria.
-- Cuadro del PRO, operador del jorgemacrismo. Responde a Jorge Macri en lo cotidiano y a Mauricio Macri en lo estratégico.
-- Ex Ministro de Seguridad porteño. Conoce a fondo el presupuesto de la Ciudad (especialmente seguridad, ~16% del total).
-- Referente de la comunidad judía (DAIA, B'nai B'rith). Defensor de la libertad de expresión.
-- Su misión política actual: blindar la gestión de Jorge Macri, mantener la autonomía del PRO frente a La Libertad Avanza y asegurar la viabilidad fiscal de la Ciudad (coparticipación, deuda con la Nación).
-
-Tu tarea es leer el paquete de noticias de relevancia Alta y Media, y redactar el "Informe Ejecutivo Semanal" para que Wolff entre a la semana con el mapa claro.
-El tono es confidencial, directo, sin vueltas. Nada de relleno. Solo lo que le sirve para tomar decisiones.
+{prompt_cliente}
 
 ---
 REGLAS ESTRICTAS ANTES DE ESCRIBIR:
-1. Cada noticia aparece en UNA SOLA sección. Si ya la usaste, no la repitas en otra sección.
-2. Todas las noticias del paquete deben estar mencionadas en algún lugar del informe. No omitas ninguna.
-3. Si no hay noticias para un eje del Radar, omití ese eje directamente. No escribas "no hay novedades".
-4. El eje "Comunidad judía / DAIA" es EXCLUSIVAMENTE para noticias que involucren organizaciones judías, antisemitismo, conflicto Israel/Gaza, o declaraciones de la DAIA. NO incluyas casos de violencia genérica o de género aunque ocurran en CABA.
-5. No inventes datos ni actores. Solo usá lo que está en las noticias del paquete.
+1. Cada noticia aparece en UNA SOLA sección. Si ya la usaste, no la repitas.
+2. Todas las noticias del paquete deben estar mencionadas en algún lugar del informe.
+3. Si no hay noticias para un eje, omití ese eje directamente. No escribas "no hay novedades".
+4. No inventes datos ni actores.
 
 ---
 ESTRUCTURA:
 
 1. TERMÓMETRO DE LA SEMANA
-Un párrafo. ¿El clima político favorece o complica al PRO porteño y a la gestión de Jorge Macri? ¿Hay presión libertaria sobre la Ciudad? ¿Cómo está el humor social en CABA?
+Un párrafo sobre el clima político general y cómo impacta al cliente.
 
 2. MAPA DE MEDIOS
-¿Cómo cubrieron los diarios los temas que le competen a Wolff esta semana? Señalá sesgos: quién ataca al PRO, quién da espacio, si hay agenda coordinada contra la gestión porteña.
+Cobertura por diario, sesgos, agenda coordinada.
 
-3. RADAR LEGISLATIVO — Lo que le importa esta semana
-Organizá TODAS las noticias en los ejes que correspondan (omití los que no tengan noticias):
-▸ Presupuesto / Coparticipación / Finanzas CABA
-▸ PRO vs LLA — disputa territorial y legislativa
-▸ Seguridad porteña y política criminal
-▸ Servicios e infraestructura porteña (transporte, energía, obras)
-▸ Comunidad judía / DAIA (solo si hay noticias específicas de ese ámbito)
-▸ Libertad de expresión
-▸ Política nacional con impacto en CABA
+3. RADAR LEGISLATIVO
+Ejes disponibles (omití los sin noticias):
+{chr(10).join('▸ ' + eje for eje in (cliente.get('ejes_radar') or '').split('|') if eje.strip())}
 
-Para cada eje: qué pasó, qué medio lo cubrió, qué implica para Wolff + links al final.
+Para cada eje: qué pasó, qué medio lo cubrió, qué implica.
 
 4. ALERTAS DE GESTIÓN
-Máximo 3. Formato: [ALERTA] título — por qué le importa a Wolff.
-Priorizá: jugadas de LLA, riesgos presupuestarios, crisis que afecten a Jorge Macri.
+Máximo 3. Formato: [ALERTA] título — por qué importa.
 
 5. OPORTUNIDADES DE LA SEMANA
-Máximo 2. ¿Dónde puede posicionarse Wolff o el PRO? ¿Qué tema conviene instalar desde la Comisión de Presupuesto o sus redes?
+Máximo 2.
 
 ---
-NOTICIAS DE LA SEMANA (relevancia Alta primero):
-{paquete_noticias}
+NOTICIAS (relevancia Alta primero):
+{paquete}
 """
 
     payload = {
-        "model": MODELO,
+        "model": MODELO_IA,
         "prompt": prompt,
         "stream": False,
-        "options": {
-            "num_ctx": CTX_BOLETIN,
-            "temperature": TEMPERATURA_BOLETIN,
-            "top_p": 0.9,
-        },
+        "options": {"num_ctx": CTX_BOLETIN, "temperature": TEMPERATURA_BOLETIN, "top_p": 0.9},
     }
 
     try:
-        logger.info(f"Iniciando inferencia Llama 3.1 (num_ctx={CTX_BOLETIN}, temp={TEMPERATURA_BOLETIN})...")
-        tiempo_inicio = time.time()
-
+        logger.info(f"Iniciando inferencia (num_ctx={CTX_BOLETIN}, temp={TEMPERATURA_BOLETIN})...")
+        t0 = time.time()
         respuesta = requests.post(OLLAMA_URL, json=payload, timeout=300)
         respuesta.raise_for_status()
+
+        fuentes_data = [(n[0], n[1], n[4], n[5], n[6], n[7]) for n in noticias]
         boletin_final = limpiar_boletin(respuesta.json()["response"])
-        boletin_final = agregar_fuentes(boletin_final, noticias_cliente)
+        boletin_final = agregar_fuentes(boletin_final, fuentes_data)
 
-        duracion = round(time.time() - tiempo_inicio, 2)
-        logger.info(f"Análisis completado en {duracion}s.")
-
-        print("\n" + "=" * 60)
-        print(boletin_final)
-        print("=" * 60)
+        duracion = round(time.time() - t0, 2)
+        logger.info(f"Generado en {duracion}s.")
 
         ahora = datetime.now()
         semana = ahora.strftime("%Y-W%V")
         fecha_hoy = ahora.strftime("%Y-%m-%d")
         hora = ahora.strftime("%Hh")
 
-        carpeta = os.path.join(REPORTES_DIR, semana)
+        carpeta = os.path.join(REPORTES_DIR, semana, slug_cliente)
         os.makedirs(carpeta, exist_ok=True)
 
         nombre_archivo = os.path.join(carpeta, f"boletin_{fecha_hoy}_{hora}.md")
         with open(nombre_archivo, "w", encoding="utf-8") as f:
-            f.write(f"# Informe — {fecha_hoy} {hora}\n\n")
+            f.write(f"# Informe {cliente['nombre']} — {fecha_hoy} {hora}\n\n")
             f.write(boletin_final)
         logger.info(f"Boletín guardado en '{nombre_archivo}'.")
         return nombre_archivo
 
     except Exception as e:
-        logger.error(f"Error al generar el boletín: {e}")
+        logger.error(f"Error al generar boletín para '{slug_cliente}': {e}")
         return None
+
+
+# Alias backward-compatible para el pipeline existente
+def generar_boletin_premium(provincia="Nacional", dias=7):
+    return generar_boletin(slug_cliente="wolff", dias=dias)
 
 
 if __name__ == "__main__":
     setup_logging()
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--provincia", default="Nacional", help="Provincia objetivo (default: Nacional)")
-    parser.add_argument("--dias", type=int, default=7, help="Rango de días hacia atrás (default: 7)")
+    parser = argparse.ArgumentParser(description="Generador de boletín ejecutivo por cliente")
+    parser.add_argument("--cliente", default="wolff", help="Slug del cliente (default: wolff)")
+    parser.add_argument("--dias", type=int, default=1, help="Ventana de días (default: 1)")
     args = parser.parse_args()
-    generar_boletin_premium(provincia=args.provincia, dias=args.dias)
+    generar_boletin(slug_cliente=args.cliente, dias=args.dias)
