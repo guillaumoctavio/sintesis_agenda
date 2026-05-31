@@ -104,7 +104,7 @@ def iniciar_analisis_objetivo(dias=1):
     cursor = conexion.cursor()
     cursor.execute(
         """SELECT id, titulo, cuerpo FROM noticias
-           WHERE (resumen IS NULL OR resumen = 'Sin resumen' OR resumen = 'Omitido')
+           WHERE (resumen IS NULL OR resumen = 'Sin resumen')
              AND fecha_extraccion >= date('now', ?)""",
         (f"-{dias} days",),
     )
@@ -134,7 +134,8 @@ def iniciar_analisis_objetivo(dias=1):
             else:
                 logger.error(f"  Error al guardar análisis #{id_noticia}.")
         else:
-            logger.warning(f"  Sin análisis para #{id_noticia}, saltando.")
+            logger.warning(f"  Sin análisis para #{id_noticia}, marcando Omitido.")
+            database.guardar_analisis_objetivo(id_noticia, "", "", "Omitido", "Nacional")
 
         time.sleep(PAUSA_ENTRE_REQUESTS)
 
