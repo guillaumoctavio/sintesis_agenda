@@ -38,8 +38,16 @@ def enviar_mensaje(texto, parse_mode="Markdown"):
             "disable_web_page_preview": True,
         })
         if not resultado or not resultado.get("ok"):
-            logger.error(f"Falló envío de mensaje: {resultado}")
-            return False
+            # Reintentar sin formato si Telegram rechaza el Markdown
+            logger.warning(f"Markdown rechazado, reintentando como texto plano: {resultado}")
+            resultado = _api("sendMessage", datos={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": chunk,
+                "disable_web_page_preview": True,
+            })
+            if not resultado or not resultado.get("ok"):
+                logger.error(f"Falló envío de mensaje (también sin formato): {resultado}")
+                return False
     return True
 
 
@@ -82,9 +90,9 @@ def extraer_resumen_boletin(texto_boletin):
 
     partes = []
     if termometro:
-        partes.append(f"*TERMÓMETRO*\n{termometro}")
+        partes.append(f"TERMÓMETRO\n{termometro}")
     if alertas:
-        partes.append(f"*ALERTAS*\n{alertas}")
+        partes.append(f"ALERTAS\n{alertas}")
     return "\n\n".join(partes)
 
 
@@ -102,8 +110,8 @@ def notificar_boletin(ruta_archivo, hora_ciclo="", duracion_min=None):
 
     from datetime import datetime
     fecha = datetime.now().strftime("%d/%m/%Y")
-    duracion_str = f" · _{duracion_min} min_" if duracion_min is not None else ""
-    encabezado = f"📰 *Informe {hora_ciclo} — {fecha}*{duracion_str}"
+    duracion_str = f" · {duracion_min} min" if duracion_min is not None else ""
+    encabezado = f"📰 Informe {hora_ciclo} — {fecha}{duracion_str}"
 
     resumen = extraer_resumen_boletin(contenido)
     mensaje = f"{encabezado}\n\n{resumen}" if resumen else encabezado
